@@ -278,23 +278,22 @@ func (r *PersistentVolumeClaimReconciler) determineScheduleAndRequeue(
 		return "", err
 	}
 	schedule, scheduleFound = getScheduleFromAnnotation(logger, ns.Annotations)
-	if !scheduleFound {
-		return "", ErrScheduleNotFound
-	}
+
 	// If the schedule is found, check whether driver supports the
 	// space reclamation using annotation on namespace and registered driver
 	// capability for decision on requeue.
-
-	requeue, supportReclaimspace := r.checkDriverSupportReclaimsSpace(logger, ns.Annotations, driverName)
-	if supportReclaimspace {
-		// if driver supports space reclamation,
-		// return schedule from ns annotation.
-		return schedule, nil
-	}
-	if requeue {
-		// The request needs to be requeued for checking
-		// driver support again.
-		return "", ErrConnNotFoundRequeueNeeded
+	if scheduleFound {
+		requeue, supportReclaimspace := r.checkDriverSupportReclaimsSpace(logger, ns.Annotations, driverName)
+		if supportReclaimspace {
+			// if driver supports space reclamation,
+			// return schedule from ns annotation.
+			return schedule, nil
+		}
+		if requeue {
+			// The request needs to be requeued for checking
+			// driver support again.
+			return "", ErrConnNotFoundRequeueNeeded
+		}
 	}
 
 	// check for storageclass schedule annotation.
