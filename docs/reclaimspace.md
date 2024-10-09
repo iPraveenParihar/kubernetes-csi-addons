@@ -120,6 +120,8 @@ $ kubectl annotate namespace default "reclaimspace.csiaddons.openshift.io/schedu
 namespace/default annotated
 ```
 
+**Note** If PVC/s needs to be exluded from ReclaimSpace operation where its Namespace has the schedule annotation set. You can do that by adding the `reclaimspace.csiaddons.openshift.io/enable: "false"` to the required PVC/s.
+
 **Note** Please note that the PersistentVolumeClaim annotation takes priority over Namespace
 annotation. The kubernetes-csi-addons only generate a `ReclaimSpaceCronJob` if the annotation
 exists on the Namespace. If an admin needs to modify or delete the annotation on the Namespace,
@@ -138,6 +140,8 @@ rbd-sc     rbd.csi.ceph.com   Delete          Immediate           true          
 $ kubectl annotate storageclass rbd-sc "reclaimspace.csiaddons.openshift.io/schedule=@midnight"
 storageclass.storage.k8s.io/rbd-sc annotated
 ```
+
+**Note** If PVC/s needs to be exluded from ReclaimSpace operation where its StorageClass has the schedule annotation set. You can do that by adding the `reclaimspace.csiaddons.openshift.io/enable: "false"` to the required PVC/s.
 
 **Note** Please note that the PersistentVolumeClaim and Namespace annotation takes priority
 over StorageClass annotation. The kubernetes-csi-addons only generate a `ReclaimSpaceCronJob`
