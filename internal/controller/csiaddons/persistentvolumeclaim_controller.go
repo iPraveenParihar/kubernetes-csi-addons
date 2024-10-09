@@ -63,6 +63,7 @@ var (
 	rsCronJobScheduleTimeAnnotation = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/schedule"
 	rsCronJobNameAnnotation         = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/cronjob"
 	rsCSIAddonsDriverAnnotation     = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/drivers"
+	rsEnableAnnotation              = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/enable"
 
 	krcJobScheduleTimeAnnotation = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/schedule"
 	krcJobNameAnnotation         = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/cronjob"
@@ -335,8 +336,13 @@ func (r *PersistentVolumeClaimReconciler) storageClassEventHandler() handler.Eve
 			}
 
 			var requests []reconcile.Request
+			scAnnotations := obj.GetAnnotations()
+			reclaimSpaceDisabled := (scAnnotations[rsEnableAnnotation] == "false")
+
 			for _, pvc := range pvcList.Items {
-				if annotationValueMissing(obj.GetAnnotations(), pvc.GetAnnotations(), annotationsToWatch) {
+				// If the StorageClass has the enable annotation set to false
+				// then all its PVCs should be disabled for reclaim space.
+				if annotationValueMissing(scAnnotations, pvc.GetAnnotations(), annotationsToWatch) || reclaimSpaceDisabled {
 					requests = append(requests, reconcile.Request{
 						NamespacedName: types.NamespacedName{
 							Name:      pvc.Name,
@@ -589,6 +595,23 @@ func (r *PersistentVolumeClaimReconciler) processReclaimSpace(
 	}
 	if rsCronJob != nil {
 		*logger = logger.WithValues("ReclaimSpaceCronJobName", rsCronJob.Name)
+	}
+
+	enabled, err := r.isReclaimSpaceEnabled(ctx, logger, pvc)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// If the ReclaimSpace is disabled, delete the cron job if it exists.
+	if !enabled {
+		if rsCronJob != nil {
+			err = r.deleteChildCronJob(ctx, logger, rsCronJob)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		return ctrl.Result{}, nil
 	}
 
 	schedule, err := r.determineScheduleAndRequeue(ctx, logger, pvc, pv.Spec.CSI.Driver, rsCronJobScheduleTimeAnnotation)
@@ -855,4 +878,51 @@ func createAnnotationPredicate(annotations ...string) predicate.Funcs {
 			return annotationValueChanged(oldAnnotations, newAnnotations, annotations)
 		},
 	}
+}
+
+// isReclaimSpaceEnabled returns false if the ReclaimSpace enable annotation is set false.
+// If found on PVC and set to false, returns false
+// If found on Namespace and set to false, returns false
+// If found on StorageClass and set to false, returns false
+// Otherwise, returns true.
+func (r *PersistentVolumeClaimReconciler) isReclaimSpaceEnabled(
+	ctx context.Context,
+	logger *logr.Logger,
+	pvc *corev1.PersistentVolumeClaim,
+) (bool, error) {
+	annotations := pvc.GetAnnotations()
+	if enable, ok := annotations[rsEnableAnnotation]; ok && enable == "false" {
+		return false, nil
+	}
+
+	ns := &corev1.Namespace{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: pvc.Namespace}, ns)
+	if err != nil {
+		logger.Error(err, "Failed to get Namespace", "Namespace", pvc.Namespace)
+		return false, err
+	}
+	if enable, ok := ns.GetAnnotations()[rsEnableAnnotation]; ok && enable == "false" {
+		return false, nil
+	}
+	
+	// For static provisioned PVs, StorageClassName is nil or empty.
+	if pvc.Spec.StorageClassName == nil || len(*pvc.Spec.StorageClassName) == 0 {
+		logger.Info("StorageClassName is empty")
+		return true, nil
+	}
+	storageClassName := *pvc.Spec.StorageClassName
+
+	// check for storageclass schedule annotation.
+	sc := &storagev1.StorageClass{}
+	err = r.Client.Get(ctx, types.NamespacedName{Name: storageClassName}, sc)
+	if err != nil {
+		logger.Error(err, "Failed to get StorageClass", "StorageClass", storageClassName)
+		return true, err
+	}
+
+	if enable, ok := sc.GetAnnotations()[rsEnableAnnotation]; ok && enable == "false" {
+		return false, nil
+	}
+
+	return true, nil
 }

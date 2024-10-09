@@ -732,3 +732,125 @@ func TestConstructRSCronJob(t *testing.T) {
 		})
 	}
 }
+
+func TestIsReclaimSpaceEnabled(t *testing.T) {
+	type args struct {
+		pvcAnnotations map[string]string
+		nsAnnotations  map[string]string
+		scAnnotations  map[string]string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "disabled on pvc",
+			args: args{
+				pvcAnnotations: map[string]string{rsEnableAnnotation: "false"},
+			},
+			want: false,
+		},
+		{
+			name: "disabled on ns",
+			args: args{
+				nsAnnotations: map[string]string{rsEnableAnnotation: "false"},
+			},
+			want: false,
+		},
+		{
+			name: "disabled on sc",
+			args: args{
+				scAnnotations:  map[string]string{rsEnableAnnotation: "false"},
+			},
+			want: false,
+		},
+		{
+			name: "not set on any resource",
+			args: args{},
+			want: true,
+		},
+		{
+			name: "enabled set on sc",
+			args: args{
+				scAnnotations: map[string]string{rsEnableAnnotation: "true"},
+			},
+			want: true,
+		},
+
+	}
+
+	ctx := context.TODO()
+	logger := logr.Discard()
+	client := fake.NewClientBuilder().Build()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-namespace",
+		},
+	}
+	sc := &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-sc",
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: ns.Name,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: &sc.Name,
+		},
+	}
+
+	r := &PersistentVolumeClaimReconciler{
+		Client:   client,
+		ConnPool: connection.NewConnectionPool(),
+	}
+
+	// Create the namespace, storage class, and PVC
+	err := r.Client.Create(ctx, ns)
+	assert.NoError(t, err)
+	err = r.Client.Create(ctx, sc)
+	assert.NoError(t, err)
+	err = r.Client.Create(ctx, pvc)
+	assert.NoError(t, err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvc.Annotations = tt.args.pvcAnnotations
+			ns.Annotations = tt.args.nsAnnotations
+			sc.Annotations = tt.args.scAnnotations
+
+			err = r.Client.Update(ctx, ns)
+			assert.NoError(t, err)
+			err = r.Client.Update(ctx, sc)
+			assert.NoError(t, err)
+			err = r.Client.Update(ctx, pvc)
+			assert.NoError(t, err)
+
+			enabled, error := r.isReclaimSpaceEnabled(ctx, &logger, pvc)
+			assert.NoError(t, error)
+			assert.Equal(t, tt.want, enabled)
+		})
+	}
+
+	t.Run("empty StorageClassName for static pv", func(t *testing.T) {
+		emptyScName := ""
+		pvc.Spec.StorageClassName = &emptyScName
+		pvc.Annotations = nil
+		enabled, error := r.isReclaimSpaceEnabled(ctx, &logger, pvc)
+		assert.NoError(t, error)
+		assert.Equal(t, true, enabled)
+	})
+
+	// test for StorageClassName is nil
+	t.Run("StorageClassName is nil", func(t *testing.T) {
+		pvc.Spec.StorageClassName = nil
+		pvc.Annotations = nil
+		enabled, error := r.isReclaimSpaceEnabled(ctx, &logger, pvc)
+		assert.NoError(t, error)
+		assert.Equal(t, true, enabled)
+	})
+}
